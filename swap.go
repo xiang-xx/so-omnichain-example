@@ -1,12 +1,19 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"math/big"
+	"so-omnichain-example/display"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 const (
 	zeroAddress = "0x0000000000000000000000000000000000000000"
+
+	methodSgReceiveForGas = "sgReceiveForGas"
 )
 
 var (
@@ -40,7 +47,24 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 		return err
 	}
 	soData := newSoData(account.Address(), fromChainInfo.ChainId, fromTokenAddress, toChainInfo.ChainId, toTokenAddress, testAmount)
-	fmt.Printf("%v", soData)
+	gas, err := estimateForGas(toChainInfo, soData, []SwapData{})
+	if err != nil {
+		return err
+	}
+	display.PrintfWithTime("dst gas for sgReceive %d\n", gas)
+
+	// 如果 from token 是 erc20token，需要先 approve
+	if fromTokenAddress != zeroAddress {
+		approvedTxHash, err := approve(fromChainInfo, fromTokenAddress, testAmount)
+		if err != nil {
+			return err
+		}
+		if approvedTxHash == "" {
+			return errors.New("approve failed")
+		}
+		display.PrintfWithTime("approve to token %s, amount %s, txHash: %s", fromTokenAddress, testAmount.String(), approvedTxHash)
+	}
+
 	return nil
 }
 
@@ -50,6 +74,31 @@ func swapSameChain(chain, fromToken, toToken string) error {
 	}
 	// todo
 	return nil
+}
+
+func approve(chain Chain, tokenAddress string, amount *big.Int) (result string, err error) {
+	pool := getConnectPool(chain.Rpc)
+	pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+		result, err = newErc20Contract(common.HexToAddress(tokenAddress), erc20Abi).Approve(chain.Rpc, c1, account, amount)
+		return err
+	})
+	return
+}
+
+func estimateForGas(toChainInfo Chain, soData SoData, toChainSwapData []SwapData) (uint64, error) {
+	var gasRes uint64
+	soDiamond := common.HexToAddress(toChainInfo.SoDiamond)
+	stargatePoolId, _ := big.NewInt(0).SetString(toChainInfo.StargetaPoolId, 10)
+	pool := getConnectPool(toChainInfo.Rpc)
+	pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+		gas, err := newDiamondContract(soDiamond, diamondAbi).SgReceiveForGas(c1, soData, stargatePoolId, toChainSwapData)
+		if err != nil {
+			return err
+		}
+		gasRes = gas
+		return nil
+	})
+	return gasRes, nil
 }
 
 func getChainInfo(chain string) (Chain, error) {
