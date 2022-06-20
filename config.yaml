@@ -4,7 +4,7 @@ networks:
     chainid: 4
     rpc: "https://rinkeby.infura.io/v3/5f4fb75602d1400d8238df6041c207af"
     stargate_router: "0x82A0F5F531F9ce0df1DF5619f74a0d3fA31FF561"
-    so_diamond: "0xA82045cD4b251b4e8f99aD92E52254c25c9d7e1C"
+    so_diamond: "0xaA0b80131b82e9358b4c36418988E1b512F5E766"
     stargate_chainid: 10001
     stargate_poolid: 1
     usdc: "0x1717A0D5C8705EE89A8aD6E808268D6A826C97A4"

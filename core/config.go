@@ -1,4 +1,4 @@
-package main
+package core
 
 type Config struct {
 	Networks Networks `yaml:"networks"`
@@ -14,8 +14,8 @@ type Chain struct {
 	Rpc             string     `yaml:"rpc"`
 	StargateRouter  string     `yaml:"stargate_router"`
 	SoDiamond       string     `yaml:"so_diamond"`
-	StargateChainId string     `yaml:"stargate_chainid"`
-	StargetaPoolId  string     `yaml:"stargate_poolid"`
+	StargateChainId int        `yaml:"stargate_chainid"`
+	StargetaPoolId  int        `yaml:"stargate_poolid"`
 	Usdc            string     `yaml:"usdc"`
 	Weth            string     `yaml:"weth"`
 	Swap            [][]string `yaml:"swap"`
