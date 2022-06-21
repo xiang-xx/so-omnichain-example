@@ -1,6 +1,7 @@
 networks:
   default: rinkeby
   rinkeby:
+    name: rinkeby
     chainid: 4
     rpc: "https://rinkeby.infura.io/v3/5f4fb75602d1400d8238df6041c207af"
     stargate_router: "0x82A0F5F531F9ce0df1DF5619f74a0d3fA31FF561"
@@ -11,6 +12,7 @@ networks:
     weth: "0xc778417E063141139Fce010982780140Aa0cD5Ab"
     swap: [ [ "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", IUniswapV2Router02 ] ]
   bsc-test:
+    name: bsc-test
     chainid: 97
     rpc: ""
     stargate_router: "0xbB0f1be1E9CE9cB27EA5b0c3a85B7cc3381d8176"
@@ -21,6 +23,7 @@ networks:
     weth: "0xae13d989dac2f0debff460ac112a837c89baa7cd"
     swap: [ [ "0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3", IUniswapV2Router02 ] ]
   avax-test:
+    name: avax-test
     chainid: 43113
     rpc: ""
     stargate_router: "0x13093E05Eb890dfA6DacecBdE51d24DabAb2Faa1"
@@ -31,6 +34,7 @@ networks:
     weth: "0x9B5828d46A43176F07656e162cCbDc787624468c"
     swap: [ [ "0x6D481b9F59b22B6eB097b986fC06E438d585c039", IUniswapV2Router02AVAX ] ]
   polygon-test:
+    name: polygon-test
     chainid: 80001
     rpc: "https://rpc-mumbai.maticvigil.com"
     stargate_router: "0x817436a076060D158204d955E5403b6Ed0A5fac0"

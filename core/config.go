@@ -10,6 +10,7 @@ type Networks struct {
 }
 
 type Chain struct {
+	Name            string     `yaml:"name"`
 	ChainId         int        `yaml:"chainid"`
 	Rpc             string     `yaml:"rpc"`
 	StargateRouter  string     `yaml:"stargate_router"`

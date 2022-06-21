@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/coming-chat/wallet-SDK/core/eth"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -20,7 +19,8 @@ import (
 )
 
 const (
-	zeroAddress = "0x0000000000000000000000000000000000000000"
+	zeroAddress         = "0x0000000000000000000000000000000000000000"
+	zeroAddressNoPrefix = "0000000000000000000000000000000000000000"
 )
 
 var (
@@ -32,8 +32,6 @@ var (
 
 var config Config
 var account *eth.Account
-var diamondAbi *abi.ABI
-var erc20Abi *abi.ABI
 
 func initConfig() {
 	data, err := os.ReadFile("./config.yaml")
@@ -49,27 +47,6 @@ func initConfig() {
 	account, err = eth.NewAccountWithMnemonic(os.Getenv("words"))
 	if err != nil {
 		panic(err)
-	}
-
-	// load abi
-	file, err := os.Open("abi/so_diamond.json")
-	if err != nil {
-		panic(err)
-	}
-	tmpDiamondAbi, err := abi.JSON(file)
-	diamondAbi = &tmpDiamondAbi
-	if err != nil {
-		panic(err)
-	}
-
-	file, err = os.Open("abi/erc20.json")
-	if err != nil {
-		panic(err)
-	}
-	tmpErc20Abi, err := abi.JSON(file)
-	erc20Abi = &tmpErc20Abi
-	if err != nil {
-		panic(erc20Abi)
 	}
 }
 
@@ -93,6 +70,7 @@ func Swap(fromChain, toChain, fromToken, toToken string) error {
 }
 
 func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
+	txSendValue := big.NewInt(0)
 	fromChainInfo, fromTokenAddress, testAmount, err := getChainAndToken(fromChain, fromToken)
 	if err != nil {
 		return err
@@ -101,15 +79,23 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 	if err != nil {
 		return err
 	}
+
 	soData := newSoData(account.Address(), fromChainInfo.ChainId, fromTokenAddress, toChainInfo.ChainId, toTokenAddress, testAmount)
-	gas, err := estimateForGas(toChainInfo, soData, []SwapData{})
+	srcSwapData := make([]SwapData, 0)
+	dstSwapData := make([]SwapData, 0)
+
+	// todo 判断 to token 是否为原生代币，是的话，需要走个 swap
+
+	// 估算目标链交易需要的 gas fee，此手续费用来计算 stargate 跨链的总体手续费
+	gas, err := estimateForGas(toChainInfo, soData, dstSwapData)
 	if err != nil {
 		return err
 	}
 	dstGas := big.NewInt(int64(gas))
 	display.PrintfWithTime("dst gas for sgReceive %d\n", gas)
 
-	// 如果 from token 是 erc20token，需要先 approve
+	// from token 是 erc20token，需要先 approve
+	// from token 是原生币，则需要先兑换成 usdc
 	if fromTokenAddress != zeroAddress {
 		approvedTxHash, err := approve(fromChainInfo, fromTokenAddress, fromChainInfo.SoDiamond, testAmount)
 		if err != nil {
@@ -118,35 +104,35 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 		if approvedTxHash == "" {
 			return errors.New("approve failed")
 		}
-		fmt.Println("===========================================================")
-		fmt.Println("approve to token:")
-		fmt.Printf("token:  %s\n", fromToken)
-		fmt.Printf("to:     %s\n", fromChainInfo.SoDiamond)
-		fmt.Printf("amount: %s\n", testAmount)
-		fmt.Printf("hash:   %s\n", approvedTxHash)
 		err = waitForTxSuccess(fromChainInfo.Rpc, approvedTxHash)
 		if err != nil {
 			return err
 		}
+	} else {
+		// from token 是 native token，则需要先 swap 成可以经由 stargate 的 usdc
+		srcSwapData, err = createSrcSwapDataFromNative(fromChainInfo, fromChainInfo.Usdc, testAmount)
+		if err != nil {
+			return err
+		}
+		txSendValue = big.NewInt(0).Add(txSendValue, testAmount)
 	}
+
+	// to token 是原生代币，则需要构造 dstSwapData
 
 	// 从源链获取 stargate cross fee，并计算发给 sodiamond 的 value
 	stargetData := newStargateData(fromChainInfo, toChainInfo, big.NewInt(0), dstGas)
-	stargateFee, err := getStargateFee(fromChainInfo, soData, stargetData, make([]SwapData, 0))
+	stargateFee, err := getStargateFee(fromChainInfo, soData, stargetData, dstSwapData)
 	if err != nil {
 		return err
 	}
 	display.PrintfWithTime("get stargate fee: %s eth\n", decimal.NewFromBigInt(stargateFee, 0).Div(decimal.NewFromBigInt(ethDecimal, 0)).StringFixed(8))
-	value := stargateFee
-	if fromTokenAddress == zeroAddress {
-		value = big.NewInt(0).Add(value, testAmount)
-	}
+	txSendValue = big.NewInt(0).Add(txSendValue, stargateFee)
 
 	soData.print()
 	stargetData.print()
 	fmt.Println("===========================================================")
-	fmt.Printf("value:            %s\n", value)
-	txHash, err := soSwapViaStargate(fromChainInfo, soData, make([]SwapData, 0), stargetData, make([]SwapData, 0), value)
+	fmt.Printf("value:            %s\n", txSendValue)
+	txHash, err := soSwapViaStargate(fromChainInfo, soData, srcSwapData, stargetData, dstSwapData, txSendValue)
 	if err != nil {
 		return err
 	}
@@ -167,12 +153,20 @@ func swapSameChain(chain, fromToken, toToken string) error {
 	return nil
 }
 
+func createSrcSwapDataFromNative(srcChain Chain, toTokenName string, fromAmount *big.Int) ([]SwapData, error) {
+	swapItem, err := newSwapData(srcChain, zeroAddress, srcChain.Usdc, fromAmount, big.NewInt(0))
+	if err != nil {
+		return nil, err
+	}
+	return []SwapData{swapItem}, nil
+}
+
 func soSwapViaStargate(srcChain Chain, soData SoData, srcSwapDataList []SwapData, stargateData StargateData, dstSwapDataList []SwapData, value *big.Int) (string, error) {
 	pool := getConnectPool(srcChain.Rpc)
 	var err error
 	var txHash string
 	err = pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
-		txHash, err = newDiamondContract(common.HexToAddress(srcChain.SoDiamond), diamondAbi).
+		txHash, err = newDiamondContract(common.HexToAddress(srcChain.SoDiamond)).
 			SoSwapViaStargate(srcChain.Rpc, c1, account, soData, srcSwapDataList, stargateData, dstSwapDataList, value)
 		return err
 	})
@@ -184,7 +178,7 @@ func getStargateFee(chain Chain, soData SoData, stargateData StargateData, swapD
 	var result *big.Int
 	var err error
 	err = pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
-		result, err = newDiamondContract(common.HexToAddress(chain.SoDiamond), diamondAbi).
+		result, err = newDiamondContract(common.HexToAddress(chain.SoDiamond)).
 			GetStargateFee(c1, soData, stargateData, swapDataList)
 		return err
 	})
@@ -194,9 +188,18 @@ func getStargateFee(chain Chain, soData SoData, stargateData StargateData, swapD
 func approve(chain Chain, tokenAddress string, approveTo string, amount *big.Int) (result string, err error) {
 	pool := getConnectPool(chain.Rpc)
 	pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
-		result, err = newErc20Contract(common.HexToAddress(tokenAddress), erc20Abi).Approve(chain.Rpc, c1, account, common.HexToAddress(approveTo), amount)
+		result, err = newErc20Contract(common.HexToAddress(tokenAddress)).Approve(chain.Rpc, c1, account, common.HexToAddress(approveTo), amount)
 		return err
 	})
+
+	if err == nil {
+		fmt.Println("===========================================================")
+		fmt.Println("approve to token:")
+		fmt.Printf("token:  %s\n", tokenAddress)
+		fmt.Printf("to:     %s\n", chain.SoDiamond)
+		fmt.Printf("amount: %s\n", amount)
+		fmt.Printf("hash:   %s\n", result)
+	}
 	return
 }
 
@@ -244,7 +247,7 @@ func estimateForGas(toChainInfo Chain, soData SoData, toChainSwapData []SwapData
 	stargatePoolId := big.NewInt(int64(toChainInfo.StargetaPoolId))
 	pool := getConnectPool(toChainInfo.Rpc)
 	pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
-		gas, err := newDiamondContract(soDiamond, diamondAbi).SgReceiveForGas(c1, soData, stargatePoolId, toChainSwapData)
+		gas, err := newDiamondContract(soDiamond).SgReceiveForGas(c1, soData, stargatePoolId, toChainSwapData)
 		if err != nil {
 			return err
 		}

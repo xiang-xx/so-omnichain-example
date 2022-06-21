@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/big"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/coming-chat/wallet-SDK/core/eth"
 	"github.com/ethereum/go-ethereum"
@@ -25,6 +27,32 @@ const (
 	methodSoSwapViaStargate = "soSwapViaStargate"
 )
 
+var (
+	diamondAbi     *abi.ABI
+	erc20Abi       *abi.ABI
+	uniswapEthAbi  *abi.ABI
+	uniswapAvaxAbi *abi.ABI
+)
+
+func init() {
+	initAbi(&diamondAbi, "abi/so_diamond.json")
+	initAbi(&erc20Abi, "abi/erc20.json")
+	initAbi(&uniswapEthAbi, "abi/IUniswapV2Router02.json")
+	initAbi(&uniswapAvaxAbi, "abi/IUniswapV2Router02AVAX.json")
+}
+
+func initAbi(a **abi.ABI, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		panic(err)
+	}
+	tmpAbi, err := abi.JSON(file)
+	*a = &tmpAbi
+	if err != nil {
+		panic(err)
+	}
+}
+
 type baseContract struct {
 	Address common.Address
 	ChainId *big.Int
@@ -35,11 +63,11 @@ type DiamondContract struct {
 	baseContract
 }
 
-func newDiamondContract(address common.Address, abi *abi.ABI) *DiamondContract {
+func newDiamondContract(address common.Address) *DiamondContract {
 	return &DiamondContract{
 		baseContract{
 			Address: address,
-			Abi:     abi,
+			Abi:     diamondAbi,
 		},
 	}
 }
@@ -98,15 +126,41 @@ func (c *DiamondContract) SoSwapViaStargate(rpc string,
 	return signAndSendTx(rawBytes, rpc, account)
 }
 
+type UniswapV2Contract struct {
+	baseContract
+}
+
+func newUnisapV2Contract(address common.Address) *UniswapV2Contract {
+	return &UniswapV2Contract{
+		baseContract{
+			Address: address,
+		},
+	}
+}
+
+func (c *UniswapV2Contract) PackInput(methodName string, fromAmount, minAmount *big.Int, path []common.Address, to common.Address) (ethereum.CallMsg, error) {
+	swapAbi := uniswapEthAbi
+	if strings.Contains(methodName, "AVAX") {
+		swapAbi = uniswapAvaxAbi
+	}
+
+	deadline := big.NewInt(time.Now().Unix() + 3600)
+	if strings.HasPrefix(methodName, "swapExactTokens") {
+		return packInput(swapAbi, common.Address{}, c.Address, methodName, fromAmount, minAmount, path, to, deadline)
+	} else {
+		return packInput(swapAbi, common.Address{}, c.Address, methodName, minAmount, path, to, deadline)
+	}
+}
+
 type Erc20Contract struct {
 	baseContract
 }
 
-func newErc20Contract(address common.Address, abi *abi.ABI) *Erc20Contract {
+func newErc20Contract(address common.Address) *Erc20Contract {
 	return &Erc20Contract{
 		baseContract{
 			Address: address,
-			Abi:     abi,
+			Abi:     erc20Abi,
 		},
 	}
 }

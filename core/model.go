@@ -102,6 +102,60 @@ func newSoData(receiver string, sourceChainId int, sendingAssetId string, destin
 	}
 }
 
+// newSwapData 构造 SwapData
+func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fromAmount, minAmount *big.Int) (SwapData, error) {
+	ethName := "ETH"
+	if chain.Name == "avax-test" {
+		ethName = "AVAX"
+	}
+
+	// swap method & path
+	funcName := getSwapFuncName(fromTokenAddress, toTokenAddress, ethName)
+	swapContractAddress := common.HexToAddress(chain.Swap[0][0])
+	path := make([]common.Address, 0)
+	if isZeroAddress(fromTokenAddress) {
+		path = append(path, common.HexToAddress(chain.Weth))
+	} else {
+		path = append(path, common.HexToAddress(fromTokenAddress))
+	}
+	if isZeroAddress(toTokenAddress) {
+		path = append(path, common.HexToAddress(chain.Weth))
+	} else {
+		path = append(path, common.HexToAddress(toTokenAddress))
+	}
+
+	callMsg, err := newUnisapV2Contract(swapContractAddress).
+		PackInput(funcName, fromAmount, minAmount, path, common.HexToAddress(chain.SoDiamond))
+	if err != nil {
+		return SwapData{}, err
+	}
+
+	return SwapData{
+		CallTo:           swapContractAddress,
+		ApproveTo:        swapContractAddress,
+		SendingAssetId:   common.HexToAddress(fromTokenAddress),
+		ReceivingAssetId: common.HexToAddress(toTokenAddress),
+		FromAmount:       fromAmount,
+		CallData:         callMsg.Data,
+	}, nil
+}
+
+func getSwapFuncName(fromTokenAddress, toTokenAddress string, ethName string) string {
+	fromName := "Tokens"
+	toName := fromName
+	if isZeroAddress(fromTokenAddress) {
+		fromName = ethName
+	}
+	if isZeroAddress(toTokenAddress) {
+		toName = ethName
+	}
+	return fmt.Sprintf("swapExact%sFor%s", fromName, toName)
+}
+
+func isZeroAddress(address string) bool {
+	return address == zeroAddress || address == zeroAddressNoPrefix
+}
+
 func randomTransactionId() [32]byte {
 	var res [32]byte
 	rand.Seed(time.Now().Unix())

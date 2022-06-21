@@ -15,6 +15,7 @@ func main() {
 		fromToken = flag.String("ft", "usdc", "from token")
 		toToken   = flag.String("tt", "usdc", "to token")
 	)
+	flag.Parse()
 
 	fmt.Println(color.HiBlueString("%s %s -->> %s %s", *fromChain, *fromToken, *toChain, *toToken))
 
