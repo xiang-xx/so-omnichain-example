@@ -21,6 +21,6 @@ func main() {
 
 	err := core.Swap(*fromChain, *toChain, *fromToken, *toToken)
 	if err != nil {
-		panic(err)
+		fmt.Println(color.HiRedString("Error: %s", err))
 	}
 }

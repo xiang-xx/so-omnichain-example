@@ -79,24 +79,64 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 	if err != nil {
 		return err
 	}
-
 	soData := newSoData(account.Address(), fromChainInfo.ChainId, fromTokenAddress, toChainInfo.ChainId, toTokenAddress, testAmount)
 	srcSwapData := make([]SwapData, 0)
+	var srcUniswapPath []common.Address
 	dstSwapData := make([]SwapData, 0)
+	var dstUniswapPath []common.Address
+	// stargate 跨链仅支持 usdc usdt stargate
+	if fromTokenAddress != fromChainInfo.Usdc {
+		srcSwapData, srcUniswapPath, err = createSwapData(fromChainInfo, fromTokenAddress, fromChainInfo.Usdc, testAmount, big.NewInt(0))
+		if err != nil {
+			return err
+		}
+	}
+	if fromTokenAddress == zeroAddress {
+		txSendValue = big.NewInt(0).Add(txSendValue, testAmount)
+	}
+	if toTokenAddress != toChainInfo.Usdc {
+		// 发交易前需要重新生成
+		// dstSwap 的 fromAmount 填 0 即可，合约会自动填入
+		dstSwapData, dstUniswapPath, err = createSwapData(toChainInfo, toChainInfo.Usdc, toTokenAddress, big.NewInt(0), big.NewInt(0))
+		if err != nil {
+			return err
+		}
+	}
 
-	// todo 判断 to token 是否为原生代币，是的话，需要走个 swap
-
-	// 估算目标链交易需要的 gas fee，此手续费用来计算 stargate 跨链的总体手续费
-	gas, err := estimateForGas(toChainInfo, soData, dstSwapData)
+	// 1. 估算目标链交易需要的 dst gas fee，此手续费用来计算 stargate 跨链的总体手续费
+	dstGasUint64, err := estimateForGas(toChainInfo, soData, dstSwapData)
 	if err != nil {
 		return err
 	}
-	dstGas := big.NewInt(int64(gas))
-	display.PrintfWithTime("dst gas for sgReceive %d\n", gas)
+	dstGas := big.NewInt(int64(dstGasUint64))
+	display.PrintfWithTime("sgReceive 预估手续费：%s\n", dstGas)
+	stargateData := newStargateData(fromChainInfo, toChainInfo, big.NewInt(0), dstGas)
 
-	// from token 是 erc20token，需要先 approve
-	// from token 是原生币，则需要先兑换成 usdc
+	// 从源链获取 stargate cross fee，并计算发给 sodiamond 的 value
+	// 2. 预估最终得到的 final amount
+	finalAmount, err := estimateFinalAmount(fromChainInfo, testAmount, srcUniswapPath, stargateData, toChainInfo, dstUniswapPath)
+	if err != nil {
+		return err
+	}
+
+	// 3. 根据滑点预估 stargate 发送到目标链的 min amount
+	minAmount, stargateMinAmount, err := estimateMinAmount(toChainInfo, finalAmount, 0.005, dstUniswapPath)
+	if err != nil {
+		return err
+	}
+	stargateData.MinAmount = stargateMinAmount
+	display.PrintfWithTime("amountOut: %s  amountMinOut: %s\n", finalAmount, minAmount)
+	display.PrintfWithTime("stargate min amount: %s\n", stargateData.MinAmount)
+	if toTokenAddress != toChainInfo.Usdc {
+		dstSwapData, _, err = createSwapData(toChainInfo, fromChainInfo.Usdc, toTokenAddress, big.NewInt(0), minAmount)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 4. 发送交易
 	if fromTokenAddress != zeroAddress {
+		// 4.1 如果 from token 是 erc20，则需要先 approve
 		approvedTxHash, err := approve(fromChainInfo, fromTokenAddress, fromChainInfo.SoDiamond, testAmount)
 		if err != nil {
 			return err
@@ -108,20 +148,9 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 		if err != nil {
 			return err
 		}
-	} else {
-		// from token 是 native token，则需要先 swap 成可以经由 stargate 的 usdc
-		srcSwapData, err = createSrcSwapDataFromNative(fromChainInfo, fromChainInfo.Usdc, testAmount)
-		if err != nil {
-			return err
-		}
-		txSendValue = big.NewInt(0).Add(txSendValue, testAmount)
 	}
-
-	// to token 是原生代币，则需要构造 dstSwapData
-
-	// 从源链获取 stargate cross fee，并计算发给 sodiamond 的 value
-	stargetData := newStargateData(fromChainInfo, toChainInfo, big.NewInt(0), dstGas)
-	stargateFee, err := getStargateFee(fromChainInfo, soData, stargetData, dstSwapData)
+	// 4.1 计算 stargateFee，跟 value 相加作为最后发送的 value
+	stargateFee, err := getStargateFee(fromChainInfo, soData, stargateData, dstSwapData)
 	if err != nil {
 		return err
 	}
@@ -129,10 +158,10 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 	txSendValue = big.NewInt(0).Add(txSendValue, stargateFee)
 
 	soData.print()
-	stargetData.print()
+	stargateData.print()
 	fmt.Println("===========================================================")
 	fmt.Printf("value:            %s\n", txSendValue)
-	txHash, err := soSwapViaStargate(fromChainInfo, soData, srcSwapData, stargetData, dstSwapData, txSendValue)
+	txHash, err := soSwapViaStargate(fromChainInfo, soData, srcSwapData, stargateData, dstSwapData, txSendValue)
 	if err != nil {
 		return err
 	}
@@ -153,12 +182,12 @@ func swapSameChain(chain, fromToken, toToken string) error {
 	return nil
 }
 
-func createSrcSwapDataFromNative(srcChain Chain, toTokenName string, fromAmount *big.Int) ([]SwapData, error) {
-	swapItem, err := newSwapData(srcChain, zeroAddress, srcChain.Usdc, fromAmount, big.NewInt(0))
+func createSwapData(chainInfo Chain, fromTokenAddress, toTokenAddress string, fromAmount, minAmount *big.Int) ([]SwapData, []common.Address, error) {
+	swapItem, path, err := newSwapData(chainInfo, fromTokenAddress, toTokenAddress, fromAmount, minAmount)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return []SwapData{swapItem}, nil
+	return []SwapData{swapItem}, path, nil
 }
 
 func soSwapViaStargate(srcChain Chain, soData SoData, srcSwapDataList []SwapData, stargateData StargateData, dstSwapDataList []SwapData, value *big.Int) (string, error) {
@@ -241,6 +270,111 @@ func waitForTxSuccess(rpcStr string, txHash string) error {
 
 }
 
+// estimateMinAmount 根据滑点预估最终得到的最小 amount
+// 返回值：目标 token 最小 amount，stargate 发给目标链的最小 amount
+func estimateMinAmount(toChainInfo Chain, finalAmount *big.Int, slippage float32, dstPath []common.Address) (*big.Int, *big.Int, error) {
+	dstTokenMinAmount := decimal.NewFromBigInt(finalAmount, 0).Mul(decimal.NewFromFloat32(1.0 - slippage)).BigInt()
+	stargateMinOut := big.NewInt(0)
+	var err error
+	pool := getConnectPool(toChainInfo.Rpc)
+	if len(dstPath) > 0 {
+		err = pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+			amountsIn, err := newUnisapV2Contract(common.HexToAddress(toChainInfo.Swap[0][0])).GetAmountsIn(c1, dstTokenMinAmount, dstPath)
+			if err != nil {
+				return err
+			}
+			stargateMinOut, err = newDiamondContract(common.HexToAddress(toChainInfo.SoDiamond)).GetAmountBeforeSoFee(c1, amountsIn[0])
+			return err
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// bsc-test usdc 精度是 18，对于 stargate 输出金额（在 from 链上使用时），需要改回精度 6
+		if toChainInfo.Name == "bsc-test" {
+			stargateMinOut = changeDecimals(stargateMinOut, 18, 6)
+		}
+	} else {
+		err = pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+			stargateMinOut, err = newDiamondContract(common.HexToAddress(toChainInfo.SoDiamond)).GetAmountBeforeSoFee(c1, dstTokenMinAmount)
+			return err
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return dstTokenMinAmount, stargateMinOut, nil
+}
+
+// estimateFinalAmount 预估在没有滑点的情况下，最终能得到的 amount
+func estimateFinalAmount(fromChainInfo Chain, amount *big.Int, srcPath []common.Address, stargateData StargateData, toChainInfo Chain, dstPath []common.Address) (*big.Int, error) {
+	// 1. 如果 srcPath 不为空，则先根据 uniswap 得到源链的 amount out
+	stargateInAmount := amount
+	var err error
+	// 1. 如果源链需要 swap，先预估 swap 得到的结果
+	srcPool := getConnectPool(fromChainInfo.Rpc)
+	if len(srcPath) > 0 {
+		// 源链 uniswap 合约估算 amount out
+		err = srcPool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+			amountsOut, err := newUnisapV2Contract(common.HexToAddress(fromChainInfo.Swap[0][0])).GetAmountsOut(c1, amount, srcPath)
+			if err != nil {
+				return err
+			}
+			stargateInAmount = amountsOut[len(amountsOut)-1]
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// 2. 预估 stargate 跨链得到的结果
+	stargateOutAmount := big.NewInt(0)
+	err = srcPool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+		// 2.1 计算跨链结果
+		diamondContract := newDiamondContract(common.HexToAddress(fromChainInfo.SoDiamond))
+		stargateOutAmount, err = diamondContract.EstimateStargateFinalAmount(c1, stargateData, stargateInAmount)
+		if err != nil {
+			return err
+		}
+		// 2.2 计算 so fee
+		soFee, err := diamondContract.GetSoFee(c1, stargateOutAmount)
+		if err != nil {
+			return err
+		}
+		stargateOutAmount = big.NewInt(0).Sub(stargateOutAmount, soFee)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(dstPath) == 0 {
+		return stargateOutAmount, nil
+	}
+
+	// 3. 如果目标链需要 swap，则预估目标链 swap 结果
+	dstAmountOut := big.NewInt(0)
+	dstPool := getConnectPool(toChainInfo.Rpc)
+	err = dstPool.Call(func(c1 *ethclient.Client, c2 *rpc.Client) error {
+		// bsc-test net, usdt 精度是 18
+		if toChainInfo.Name == "bsc-test" {
+			stargateOutAmount = changeDecimals(stargateOutAmount, 6, 18)
+		}
+		dstAmountsOut, err := newUnisapV2Contract(common.HexToAddress(toChainInfo.Swap[0][0])).
+			GetAmountsOut(c1, stargateOutAmount, dstPath)
+		if err != nil {
+			return err
+		}
+		dstAmountOut = dstAmountsOut[len(dstAmountsOut)-1]
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dstAmountOut, nil
+}
+
+// estimateForGas 预估目标链的 gas，此为手续费的一项
 func estimateForGas(toChainInfo Chain, soData SoData, toChainSwapData []SwapData) (uint64, error) {
 	var gasRes uint64
 	soDiamond := common.HexToAddress(toChainInfo.SoDiamond)
@@ -263,6 +397,8 @@ func getChainInfo(chain string) (Chain, error) {
 		return config.Networks.Rinkeby, nil
 	case "polygon-test":
 		return config.Networks.PolygonTest, nil
+	case "avax-test":
+		return config.Networks.AvaxTest, nil
 	default:
 		return Chain{}, errUnsupportChain
 	}

@@ -103,7 +103,7 @@ func newSoData(receiver string, sourceChainId int, sendingAssetId string, destin
 }
 
 // newSwapData 构造 SwapData
-func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fromAmount, minAmount *big.Int) (SwapData, error) {
+func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fromAmount, minAmount *big.Int) (SwapData, []common.Address, error) {
 	ethName := "ETH"
 	if chain.Name == "avax-test" {
 		ethName = "AVAX"
@@ -127,7 +127,7 @@ func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fr
 	callMsg, err := newUnisapV2Contract(swapContractAddress).
 		PackInput(funcName, fromAmount, minAmount, path, common.HexToAddress(chain.SoDiamond))
 	if err != nil {
-		return SwapData{}, err
+		return SwapData{}, path, err
 	}
 
 	return SwapData{
@@ -137,7 +137,7 @@ func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fr
 		ReceivingAssetId: common.HexToAddress(toTokenAddress),
 		FromAmount:       fromAmount,
 		CallData:         callMsg.Data,
-	}, nil
+	}, path, nil
 }
 
 func getSwapFuncName(fromTokenAddress, toTokenAddress string, ethName string) string {

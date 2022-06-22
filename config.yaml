@@ -5,7 +5,7 @@ networks:
     chainid: 4
     rpc: "https://rinkeby.infura.io/v3/5f4fb75602d1400d8238df6041c207af"
     stargate_router: "0x82A0F5F531F9ce0df1DF5619f74a0d3fA31FF561"
-    so_diamond: "0xaA0b80131b82e9358b4c36418988E1b512F5E766"
+    so_diamond: "0xf615d53D56a2257b1CD2D47c81035816Da2074cE"
     stargate_chainid: 10001
     stargate_poolid: 1
     usdc: "0x1717A0D5C8705EE89A8aD6E808268D6A826C97A4"
@@ -25,9 +25,9 @@ networks:
   avax-test:
     name: avax-test
     chainid: 43113
-    rpc: ""
+    rpc: "https://api.avax-test.network/ext/bc/C/rpc"
     stargate_router: "0x13093E05Eb890dfA6DacecBdE51d24DabAb2Faa1"
-    so_diamond: "0x9363a291b5BEbde4A0479Da7bA8846b2399E7b06"
+    so_diamond: "0x7b74Ea20a1e2003F305c4adcD61Df1A72A38e50b"
     stargate_chainid: 10006
     stargate_poolid: 1
     usdc: "0x4A0D1092E9df255cf95D72834Ea9255132782318"
@@ -38,7 +38,7 @@ networks:
     chainid: 80001
     rpc: "https://rpc-mumbai.maticvigil.com"
     stargate_router: "0x817436a076060D158204d955E5403b6Ed0A5fac0"
-    so_diamond: "0x9363a291b5BEbde4A0479Da7bA8846b2399E7b06"
+    so_diamond: "0x766c6a9d6a729298b7C915b02E2726B7F3202e4c"
     stargate_chainid: 10009
     stargate_poolid: 1
     usdc: "0x742DfA5Aa70a8212857966D491D67B09Ce7D6ec7"

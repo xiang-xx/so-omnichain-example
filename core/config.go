@@ -7,6 +7,7 @@ type Config struct {
 type Networks struct {
 	Rinkeby     Chain `yaml:"rinkeby"`
 	PolygonTest Chain `yaml:"polygon-test"`
+	AvaxTest    Chain `yaml:"avax-test"`
 }
 
 type Chain struct {

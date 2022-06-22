@@ -21,10 +21,15 @@ import (
 )
 
 const (
-	methodApprove           = "approve"
-	methodSgReceiveForGas   = "sgReceiveForGas"
-	methodGetStargateFee    = "getStargateFee"
-	methodSoSwapViaStargate = "soSwapViaStargate"
+	methodApprove                     = "approve"
+	methodSgReceiveForGas             = "sgReceiveForGas"
+	methodGetStargateFee              = "getStargateFee"
+	methodSoSwapViaStargate           = "soSwapViaStargate"
+	methodGetAmountsOut               = "getAmountsOut"
+	methodGetAmountIn                 = "getAmountsIn"
+	methodEstimateStargateFinalAmount = "estimateStargateFinalAmount"
+	methodGetSoFee                    = "getSoFee"
+	methodGetAmountBeforeSoFee        = "getAmountBeforeSoFee"
 )
 
 var (
@@ -72,6 +77,42 @@ func newDiamondContract(address common.Address) *DiamondContract {
 	}
 }
 
+func (c *DiamondContract) EstimateStargateFinalAmount(client *ethclient.Client, stargateData StargateData, amount *big.Int) (*big.Int, error) {
+	opts := &bind.CallOpts{}
+	msg, err := packInput(c.Abi, opts.From, c.Address, methodEstimateStargateFinalAmount, stargateData, amount)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := big.NewInt(0)
+	err = unpackOutput(&resp, c.Abi, methodEstimateStargateFinalAmount, resData)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (c *DiamondContract) GetSoFee(client *ethclient.Client, amount *big.Int) (*big.Int, error) {
+	opts := &bind.CallOpts{}
+	msg, err := packInput(c.Abi, opts.From, c.Address, methodGetSoFee, amount)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := big.NewInt(0)
+	err = unpackOutput(&resp, c.Abi, methodGetSoFee, resData)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 func (c *DiamondContract) SgReceiveForGas(client *ethclient.Client, soData SoData, stargatePoolId *big.Int, toChainSwapData []SwapData) (uint64, error) {
 	opts := &bind.CallOpts{}
 	msg, err := packInput(c.Abi, opts.From, c.Address, methodSgReceiveForGas, soData, stargatePoolId, toChainSwapData)
@@ -79,6 +120,24 @@ func (c *DiamondContract) SgReceiveForGas(client *ethclient.Client, soData SoDat
 		return 0, err
 	}
 	return bind.ContractTransactor(client).EstimateGas(context.Background(), msg)
+}
+
+func (c *DiamondContract) GetAmountBeforeSoFee(client *ethclient.Client, amount *big.Int) (*big.Int, error) {
+	opts := &bind.CallOpts{}
+	msg, err := packInput(c.Abi, opts.From, c.Address, methodGetAmountBeforeSoFee, amount)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := big.NewInt(0)
+	err = unpackOutput(&resp, c.Abi, methodGetAmountBeforeSoFee, resData)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (c *DiamondContract) GetStargateFee(client *ethclient.Client, soData SoData, stargateData StargateData, swapDataList []SwapData) (*big.Int, error) {
@@ -134,6 +193,7 @@ func newUnisapV2Contract(address common.Address) *UniswapV2Contract {
 	return &UniswapV2Contract{
 		baseContract{
 			Address: address,
+			Abi:     uniswapEthAbi, // 默认使用 eth abi
 		},
 	}
 }
@@ -150,6 +210,42 @@ func (c *UniswapV2Contract) PackInput(methodName string, fromAmount, minAmount *
 	} else {
 		return packInput(swapAbi, common.Address{}, c.Address, methodName, minAmount, path, to, deadline)
 	}
+}
+
+func (c *UniswapV2Contract) GetAmountsIn(client *ethclient.Client, amountOut *big.Int, path []common.Address) ([]*big.Int, error) {
+	opts := &bind.CallOpts{}
+	msg, err := packInput(c.Abi, opts.From, c.Address, methodGetAmountIn, amountOut, path)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]*big.Int, len(path)-1)
+	err = unpackOutput(&resp, c.Abi, methodGetAmountIn, resData)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (c *UniswapV2Contract) GetAmountsOut(client *ethclient.Client, amountIn *big.Int, path []common.Address) ([]*big.Int, error) {
+	opts := &bind.CallOpts{}
+	msg, err := packInput(c.Abi, opts.From, c.Address, methodGetAmountsOut, amountIn, path)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]*big.Int, len(path)-1)
+	err = unpackOutput(&resp, c.Abi, methodGetAmountsOut, resData)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 type Erc20Contract struct {
