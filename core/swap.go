@@ -119,7 +119,7 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 		return err
 	}
 
-	// 3. 根据滑点预估 stargate 发送到目标链的 min amount
+	// 3. 根据滑点预估 stargate 发送到目标链的 min amount，并重新构造 dstSwapData
 	minAmount, stargateMinAmount, err := estimateMinAmount(toChainInfo, finalAmount, 0.005, dstUniswapPath)
 	if err != nil {
 		return err
@@ -128,7 +128,7 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 	display.PrintfWithTime("amountOut: %s  amountMinOut: %s\n", finalAmount, minAmount)
 	display.PrintfWithTime("stargate min amount: %s\n", stargateData.MinAmount)
 	if toTokenAddress != toChainInfo.Usdc {
-		dstSwapData, _, err = createSwapData(toChainInfo, fromChainInfo.Usdc, toTokenAddress, big.NewInt(0), minAmount)
+		dstSwapData, _, err = createSwapData(toChainInfo, toChainInfo.Usdc, toTokenAddress, big.NewInt(0), minAmount)
 		if err != nil {
 			return err
 		}
@@ -178,7 +178,65 @@ func swapSameChain(chain, fromToken, toToken string) error {
 	if fromToken == toToken {
 		return nil
 	}
-	// todo
+	// 获取当前执行环境
+	chainInfo, fromTokenAddress, testAmount, err := getChainAndToken(chain, fromToken)
+	if err != nil {
+		return err
+	}
+	_, toTokenAddress, _, err := getChainAndToken(chain, toToken)
+	if err != nil {
+		return err
+	}
+
+	// 构造基本的数据结构
+	soData := newSoData(account.Address(), chainInfo.ChainId, fromTokenAddress, chainInfo.ChainId, toTokenAddress, testAmount)
+	// 构造 uniswapPath，生产环境下应按照 pair 库存寻找最佳路径
+	_, uniswapPath, err := createSwapData(chainInfo, fromTokenAddress, toTokenAddress, testAmount, big.NewInt(0))
+	if err != nil {
+		return err
+	}
+	txSendValue := big.NewInt(0)
+	if fromTokenAddress == zeroAddress {
+		txSendValue = big.NewInt(0).Add(txSendValue, testAmount)
+	}
+
+	// 1. 根据滑点计算 minAmount，构造 swapData
+	_, amountMinOut, err := estimateUniswapAmount(chainInfo, testAmount, 0.005, uniswapPath)
+	if err != nil {
+		return err
+	}
+	swapData, _, err := createSwapData(chainInfo, fromTokenAddress, toTokenAddress, testAmount, amountMinOut)
+	if err != nil {
+		return err
+	}
+
+	// 2. 如果 from token 是 erc20，需要先 approve
+	if fromTokenAddress != zeroAddress {
+		// 2.1 如果 from token 是 erc20，则需要先 approve
+		approvedTxHash, err := approve(chainInfo, fromTokenAddress, chainInfo.SoDiamond, testAmount)
+		if err != nil {
+			return err
+		}
+		if approvedTxHash == "" {
+			return errors.New("approve failed")
+		}
+		err = waitForTxSuccess(chainInfo.Rpc, approvedTxHash)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 3. 调用 sodiamond 合约 swapTokensGeneric
+	txHash, err := swapTokensGeneric(chainInfo, soData, swapData, txSendValue)
+	if err != nil {
+		return err
+	}
+	display.PrintfWithTime("txHash: %s\n", txHash)
+	err = waitForTxSuccess(chainInfo.Rpc, txHash)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -190,6 +248,20 @@ func createSwapData(chainInfo Chain, fromTokenAddress, toTokenAddress string, fr
 	return []SwapData{swapItem}, path, nil
 }
 
+// swapTokensGeneric 调用 soDiamond 合约，完成单链 swap
+func swapTokensGeneric(chain Chain, soData SoData, srcSwapDataList []SwapData, value *big.Int) (string, error) {
+	pool := getConnectPool(chain.Rpc)
+	var err error
+	var txHash string
+	err = pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
+		txHash, err = newDiamondContract(common.HexToAddress(chain.SoDiamond)).
+			SwapTokensGeneric(chain.Rpc, c1, account, soData, srcSwapDataList, value)
+		return err
+	})
+	return txHash, err
+}
+
+// soSwapViaStargate 调用 soDiamond 合约，通过 stargate 跨链兑换
 func soSwapViaStargate(srcChain Chain, soData SoData, srcSwapDataList []SwapData, stargateData StargateData, dstSwapDataList []SwapData, value *big.Int) (string, error) {
 	pool := getConnectPool(srcChain.Rpc)
 	var err error
@@ -267,7 +339,24 @@ func waitForTxSuccess(rpcStr string, txHash string) error {
 		fmt.Println(color.HiRedString("tx failed %s", txHash))
 	}
 	return errors.New("transaction failed:" + txHash)
+}
 
+// estimateUniswapAmount 估算此路径下 uniswap amountOut amountMinOut
+func estimateUniswapAmount(chainInfo Chain, amountIn *big.Int, slippage float32, path []common.Address) (*big.Int, *big.Int, error) {
+	pool := getConnectPool(chainInfo.Rpc)
+	var err error
+	var amountOut *big.Int
+	var amountMinOut *big.Int
+	err = pool.Call(func(c1 *ethclient.Client, c2 *rpc.Client) error {
+		amountsOut, err := newUnisapV2Contract(common.HexToAddress(chainInfo.Swap[0][0])).GetAmountsOut(c1, amountIn, path)
+		if err != nil {
+			return err
+		}
+		amountOut = amountsOut[len(amountsOut)-1]
+		amountMinOut = decimal.NewFromBigInt(amountOut, 0).Mul(decimal.NewFromFloat32(1.0 - slippage)).BigInt()
+		return nil
+	})
+	return amountOut, amountMinOut, err
 }
 
 // estimateMinAmount 根据滑点预估最终得到的最小 amount

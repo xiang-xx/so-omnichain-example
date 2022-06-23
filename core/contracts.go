@@ -25,6 +25,7 @@ const (
 	methodSgReceiveForGas             = "sgReceiveForGas"
 	methodGetStargateFee              = "getStargateFee"
 	methodSoSwapViaStargate           = "soSwapViaStargate"
+	methodSwapTokensGeneric           = "swapTokensGeneric"
 	methodGetAmountsOut               = "getAmountsOut"
 	methodGetAmountIn                 = "getAmountsIn"
 	methodEstimateStargateFinalAmount = "estimateStargateFinalAmount"
@@ -156,6 +157,31 @@ func (c *DiamondContract) GetStargateFee(client *ethclient.Client, soData SoData
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (c *DiamondContract) SwapTokensGeneric(rpc string,
+	client *ethclient.Client,
+	account *eth.Account,
+	soData SoData,
+	srcSwapDataList []SwapData,
+	value *big.Int) (string, error) {
+	ctx := context.Background()
+	accountAddress := common.HexToAddress(account.Address())
+	opts := &bind.TransactOpts{
+		From: accountAddress,
+	}
+	// 合约参数
+	msg, err := packInput(c.Abi, opts.From, c.Address, methodSwapTokensGeneric, soData, srcSwapDataList)
+	if err != nil {
+		return "", err
+	}
+	// 获取 gas gasprice,构造 tx, encode 成 []byte，使用 account 签名，使用 client 发送
+	// 交易数据由服务端构造，sdk 组装成 tx, marshalBinary 之后交给 wallet-sdk 处理签名 + 发送
+	rawBytes, err := createRawTx(ctx, client, accountAddress, &c.Address, msg, value)
+	if err != nil {
+		return "", err
+	}
+	return signAndSendTx(rawBytes, rpc, account)
 }
 
 func (c *DiamondContract) SoSwapViaStargate(rpc string,
@@ -325,7 +351,7 @@ func createRawTx(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	gasLimit := uint64(float64(estimateGas) * 1.1)
+	gasLimit := uint64(float64(estimateGas) * 5)
 
 	priorityFee, err := client.SuggestGasTipCap(ctx)
 	if err != nil {
@@ -338,7 +364,7 @@ func createRawTx(ctx context.Context,
 		Value:     value,
 		Gas:       gasLimit,
 		GasFeeCap: priorityFee,
-		GasTipCap: decimal.NewFromBigInt(priorityFee, 0).Mul(decimal.NewFromFloat(1.2)).BigInt(),
+		GasTipCap: decimal.NewFromBigInt(priorityFee, 0).Mul(decimal.NewFromFloat(8)).BigInt(),
 		Data:      msg.Data,
 	})
 	return rawTx.MarshalBinary()
