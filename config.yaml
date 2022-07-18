@@ -33,6 +33,17 @@ networks:
     usdc: "0x742DfA5Aa70a8212857966D491D67B09Ce7D6ec7"
     weth: "0x9c3C9283D3e44854697Cd22D3Faa240Cfb032889"
     swap: [ [ "0x8954AfA98594b838bda56FE4C12a09D7739D179b", IUniswapV2Router02 ] ]
+  optimism-test:
+    name: optimism-test
+    chainid: 69
+    rpc: "https://kovan.optimism.io"
+    stargate_router: "0xCC68641528B948642bDE1729805d6cf1DECB0B00"
+    so_diamond: "0xEdF7ce007E2561afd80EB981aE466aFc5ad70eEf"
+    stargate_chainid: 10011
+    stargate_poolid: 1
+    usdc: "0x567f39d9e6d02078F357658f498F80eF087059aa"
+    weth: "0x4200000000000000000000000000000000000006"
+    swap: [ [ "0xE592427A0AEce92De3Edee1F18E0157C05861564", ISwapRouter, "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6" ] ]
 
 
 

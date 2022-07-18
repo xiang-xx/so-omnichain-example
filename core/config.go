@@ -5,9 +5,10 @@ type Config struct {
 }
 
 type Networks struct {
-	Rinkeby     Chain `yaml:"rinkeby"`
-	PolygonTest Chain `yaml:"polygon-test"`
-	AvaxTest    Chain `yaml:"avax-test"`
+	Rinkeby      Chain `yaml:"rinkeby"`
+	PolygonTest  Chain `yaml:"polygon-test"`
+	AvaxTest     Chain `yaml:"avax-test"`
+	OptimismTest Chain `yaml:"optimism-test"`
 }
 
 type Chain struct {

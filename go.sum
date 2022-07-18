@@ -111,6 +111,8 @@ github.com/cloudflare/cloudflare-go v0.10.2-0.20190916151808-a80f83b9add9/go.mod
 github.com/cloudflare/cloudflare-go v0.14.0/go.mod h1:EnwdgGMaFOruiPZRFSgn+TsQ3hQ7C/YWzIGLeu5c304=
 github.com/coming-chat/wallet-SDK v0.2.4 h1:JKdlAGDXG4Gx8ki8CC0BHwCNfqNTyB4wheq4EAKJDKI=
 github.com/coming-chat/wallet-SDK v0.2.4/go.mod h1:7m5x3QsjqTxCQkxMJF7n1jES3ywWyG58ucBRiDOCwEw=
+github.com/coming-chat/wallet-SDK v0.2.6-0.20220714104311-4b3ffa10b2e8 h1:Mgen6nPaO1sY4+Low/nJczVuOgBr6vMSj/6Xb6pTtV4=
+github.com/coming-chat/wallet-SDK v0.2.6-0.20220714104311-4b3ffa10b2e8/go.mod h1:vB0HeMB9xQh+uD7kTesKfCNeSGIczQn9HndS0zveLAw=
 github.com/consensys/bavard v0.1.8-0.20210406032232-f3452dc9b572/go.mod h1:Bpd0/3mZuaj6Sj+PqrmIquiOKy397AKGThQPaGzNXAQ=
 github.com/consensys/gnark-crypto v0.4.1-0.20210426202927-39ac3d4b3f1f/go.mod h1:815PAHg3wvysy0SyIqanF8gZ0Y1wjk/hrDHD/iT88+Q=
 github.com/cosmos/go-bip39 v0.0.0-20180819234021-555e2067c45d/go.mod h1:tSxLoYXyBmiFeKpvmq4dzayMdCjCnu8uqmCysIGBT2Y=

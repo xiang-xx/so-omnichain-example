@@ -39,8 +39,8 @@ func (d *SoData) print() {
 type SwapData struct {
 	CallTo           common.Address
 	ApproveTo        common.Address
-	SendingAssetId   common.Address
-	ReceivingAssetId common.Address // token address, eth 是 0 地址
+	SendingAssetId   common.Address // eth 是传 0 地址，不管是 v2 还是 v3
+	ReceivingAssetId common.Address // token address, eth 是 0 地址, v3 swap 是 weth，不能是 0 地址
 	FromAmount       *big.Int       // swap start token amount
 	CallData         []byte         //  The swap callData callData = abi.encodeWithSignature("swapExactETHForTokens", minAmount, [sendingAssetId, receivingAssetId], 以太坊SoDiamond地址, deadline)
 }
@@ -109,6 +109,14 @@ func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fr
 		ethName = "AVAX"
 	}
 
+	// swap 合约
+	swapVersion := versionV2
+	quoteAdderss := ""
+	if chain.Swap[0][1] == "ISwapRouter" {
+		swapVersion = versionV3
+		quoteAdderss = chain.Swap[0][2]
+	}
+
 	// swap method & path
 	funcName := getSwapFuncName(fromTokenAddress, toTokenAddress, ethName)
 	swapContractAddress := common.HexToAddress(chain.Swap[0][0])
@@ -124,17 +132,22 @@ func newSwapData(chain Chain, fromTokenAddress string, toTokenAddress string, fr
 		path = append(path, common.HexToAddress(toTokenAddress))
 	}
 
-	callMsg, err := newUnisapV2Contract(swapContractAddress).
+	callMsg, err := newUnisapV2Contract(swapContractAddress, swapVersion, quoteAdderss).
 		PackInput(funcName, fromAmount, minAmount, path, common.HexToAddress(chain.SoDiamond))
 	if err != nil {
 		return SwapData{}, path, err
+	}
+
+	// v3 swap receiveAssetId 是 weth，不能是 0 地址
+	if isZeroAddress(toTokenAddress) && swapVersion == versionV3 {
+		toTokenAddress = chain.Weth
 	}
 
 	return SwapData{
 		CallTo:           swapContractAddress,
 		ApproveTo:        swapContractAddress,
 		SendingAssetId:   common.HexToAddress(fromTokenAddress),
-		ReceivingAssetId: common.HexToAddress(toTokenAddress),
+		ReceivingAssetId: common.HexToAddress(toTokenAddress), // token address, eth 是 0 地址, v3 swap 是 weth，不能是 0 地址
 		FromAmount:       fromAmount,
 		CallData:         callMsg.Data,
 	}, path, nil

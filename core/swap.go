@@ -55,11 +55,11 @@ func init() {
 
 	usdcDecimal, _ = big.NewInt(0).SetString("1000000", 10)            // 1e6
 	ethDecimal, _ = big.NewInt(0).SetString("1000000000000000000", 10) // 1e18
-	usdcAmount = big.NewInt(0).Mul(big.NewInt(100), usdcDecimal)       // 100 usdc
+	usdcAmount = big.NewInt(0).Mul(big.NewInt(10), usdcDecimal)        // 10 usdc
 	ethAmount = big.NewInt(0).Mul(
-		big.NewInt(0).Div(ethDecimal, big.NewInt(10000000000)),
+		big.NewInt(0).Div(ethDecimal, big.NewInt(100)),
 		big.NewInt(2),
-	) // 2*1e-10 eth，与 https://github.com/chainx-org/SoOmnichain/blob/main/scripts/swap.py 测试数据相同
+	) // 2*1e-2
 }
 
 func Swap(fromChain, toChain, fromToken, toToken string) error {
@@ -120,7 +120,8 @@ func swapDiffChain(fromChain, toChain, fromToken, toToken string) error {
 	}
 
 	// 3. 根据滑点预估 stargate 发送到目标链的 min amount，并重新构造 dstSwapData
-	minAmount, stargateMinAmount, err := estimateMinAmount(toChainInfo, finalAmount, 0.005, dstUniswapPath)
+	slippage := 0.01
+	minAmount, stargateMinAmount, err := estimateMinAmount(toChainInfo, finalAmount, float32(slippage), dstUniswapPath)
 	if err != nil {
 		return err
 	}
@@ -347,8 +348,17 @@ func estimateUniswapAmount(chainInfo Chain, amountIn *big.Int, slippage float32,
 	var err error
 	var amountOut *big.Int
 	var amountMinOut *big.Int
+
+	swapVersion := versionV2
+	quoteAdderss := ""
+	if chainInfo.Swap[0][1] == "ISwapRouter" {
+		swapVersion = versionV3
+		quoteAdderss = chainInfo.Swap[0][2]
+	}
+
 	err = pool.Call(func(c1 *ethclient.Client, c2 *rpc.Client) error {
-		amountsOut, err := newUnisapV2Contract(common.HexToAddress(chainInfo.Swap[0][0])).GetAmountsOut(c1, amountIn, path)
+		amountsOut, err := newUnisapV2Contract(common.HexToAddress(chainInfo.Swap[0][0]), swapVersion, quoteAdderss).
+			GetAmountsOut(c1, amountIn, path)
 		if err != nil {
 			return err
 		}
@@ -366,9 +376,15 @@ func estimateMinAmount(toChainInfo Chain, finalAmount *big.Int, slippage float32
 	stargateMinOut := big.NewInt(0)
 	var err error
 	pool := getConnectPool(toChainInfo.Rpc)
+	swapVersion := versionV2
+	quoteAdderss := ""
+	if toChainInfo.Swap[0][1] == "ISwapRouter" {
+		swapVersion = versionV3
+		quoteAdderss = toChainInfo.Swap[0][2]
+	}
 	if len(dstPath) > 0 {
 		err = pool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
-			amountsIn, err := newUnisapV2Contract(common.HexToAddress(toChainInfo.Swap[0][0])).GetAmountsIn(c1, dstTokenMinAmount, dstPath)
+			amountsIn, err := newUnisapV2Contract(common.HexToAddress(toChainInfo.Swap[0][0]), swapVersion, quoteAdderss).GetAmountsIn(c1, dstTokenMinAmount, dstPath)
 			if err != nil {
 				return err
 			}
@@ -403,9 +419,15 @@ func estimateFinalAmount(fromChainInfo Chain, amount *big.Int, srcPath []common.
 	// 1. 如果源链需要 swap，先预估 swap 得到的结果
 	srcPool := getConnectPool(fromChainInfo.Rpc)
 	if len(srcPath) > 0 {
+		swapVersion := versionV2
+		quoteAdderss := ""
+		if fromChainInfo.Swap[0][1] == "ISwapRouter" {
+			swapVersion = versionV3
+			quoteAdderss = fromChainInfo.Swap[0][2]
+		}
 		// 源链 uniswap 合约估算 amount out
 		err = srcPool.Call(func(c1 *ethclient.Client, _ *rpc.Client) error {
-			amountsOut, err := newUnisapV2Contract(common.HexToAddress(fromChainInfo.Swap[0][0])).GetAmountsOut(c1, amount, srcPath)
+			amountsOut, err := newUnisapV2Contract(common.HexToAddress(fromChainInfo.Swap[0][0]), swapVersion, quoteAdderss).GetAmountsOut(c1, amount, srcPath)
 			if err != nil {
 				return err
 			}
@@ -449,7 +471,13 @@ func estimateFinalAmount(fromChainInfo Chain, amount *big.Int, srcPath []common.
 		if toChainInfo.Name == "bsc-test" {
 			stargateOutAmount = changeDecimals(stargateOutAmount, 6, 18)
 		}
-		dstAmountsOut, err := newUnisapV2Contract(common.HexToAddress(toChainInfo.Swap[0][0])).
+		swapVersion := versionV2
+		quoteAdderss := ""
+		if toChainInfo.Swap[0][1] == "ISwapRouter" {
+			swapVersion = versionV3
+			quoteAdderss = toChainInfo.Swap[0][2]
+		}
+		dstAmountsOut, err := newUnisapV2Contract(common.HexToAddress(toChainInfo.Swap[0][0]), swapVersion, quoteAdderss).
 			GetAmountsOut(c1, stargateOutAmount, dstPath)
 		if err != nil {
 			return err
@@ -488,6 +516,8 @@ func getChainInfo(chain string) (Chain, error) {
 		return config.Networks.PolygonTest, nil
 	case "avax-test":
 		return config.Networks.AvaxTest, nil
+	case "optimism-test":
+		return config.Networks.OptimismTest, nil
 	default:
 		return Chain{}, errUnsupportChain
 	}

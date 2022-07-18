@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math/big"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +30,17 @@ const (
 	methodEstimateStargateFinalAmount = "estimateStargateFinalAmount"
 	methodGetSoFee                    = "getSoFee"
 	methodGetAmountBeforeSoFee        = "getAmountBeforeSoFee"
+	methodExactInput                  = "exactInput" // v3 swap
+	methodQuoteExactInput             = "quoteExactInput"
+	methodQuoteExactOutput            = "quoteExactOutput"
+
+	versionV2 = "v2"
+	versionV3 = "v3"
+
+	AddrSize = 20
+	FeeSize  = 3
+	Offset   = AddrSize + FeeSize
+	DataSize = Offset + AddrSize
 )
 
 var (
@@ -38,6 +48,8 @@ var (
 	erc20Abi       *abi.ABI
 	uniswapEthAbi  *abi.ABI
 	uniswapAvaxAbi *abi.ABI
+	uniswapV3Abi   *abi.ABI
+	quoterAbi      *abi.ABI
 )
 
 func init() {
@@ -45,6 +57,8 @@ func init() {
 	initAbi(&erc20Abi, "abi/erc20.json")
 	initAbi(&uniswapEthAbi, "abi/IUniswapV2Router02.json")
 	initAbi(&uniswapAvaxAbi, "abi/IUniswapV2Router02AVAX.json")
+	initAbi(&uniswapV3Abi, "abi/ISwapRouter.json")
+	initAbi(&quoterAbi, "abi/IQuoter.json")
 }
 
 func initAbi(a **abi.ABI, path string) {
@@ -57,6 +71,14 @@ func initAbi(a **abi.ABI, path string) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+type ExactInputParams struct {
+	Path             []byte
+	Recipient        common.Address
+	Deadline         *big.Int
+	AmountIn         *big.Int
+	AmountOutMinimum *big.Int
 }
 
 type baseContract struct {
@@ -213,14 +235,20 @@ func (c *DiamondContract) SoSwapViaStargate(rpc string,
 
 type UniswapV2Contract struct {
 	baseContract
+	swapVersion  string
+	quoteAbi     *abi.ABI
+	quoteAddress common.Address
 }
 
-func newUnisapV2Contract(address common.Address) *UniswapV2Contract {
+func newUnisapV2Contract(address common.Address, swapVersion string, quoterAddress string) *UniswapV2Contract {
 	return &UniswapV2Contract{
-		baseContract{
+		baseContract: baseContract{
 			Address: address,
 			Abi:     uniswapEthAbi, // 默认使用 eth abi
 		},
+		swapVersion:  swapVersion,
+		quoteAbi:     quoterAbi,
+		quoteAddress: common.HexToAddress(quoterAddress),
 	}
 }
 
@@ -231,6 +259,21 @@ func (c *UniswapV2Contract) PackInput(methodName string, fromAmount, minAmount *
 	}
 
 	deadline := big.NewInt(time.Now().Unix() + 3600)
+
+	if c.swapVersion == versionV3 {
+		pathByte, err := encodePath(path)
+		if err != nil {
+			return ethereum.CallMsg{}, err
+		}
+		return packInput(uniswapV3Abi, common.Address{}, c.Address, methodExactInput, ExactInputParams{
+			Path:             pathByte,
+			Recipient:        to,
+			Deadline:         deadline,
+			AmountIn:         fromAmount,
+			AmountOutMinimum: minAmount,
+		})
+	}
+
 	if strings.HasPrefix(methodName, "swapExactTokens") {
 		return packInput(swapAbi, common.Address{}, c.Address, methodName, fromAmount, minAmount, path, to, deadline)
 	} else {
@@ -238,7 +281,29 @@ func (c *UniswapV2Contract) PackInput(methodName string, fromAmount, minAmount *
 	}
 }
 
+// EncodePath encode path to bytes
+func encodePath(path []common.Address) (encoded []byte, err error) {
+	fees := make([]int, len(path)-1)
+	for i := range fees {
+		fees[i] = 3000
+	}
+
+	encoded = make([]byte, 0, len(fees)*Offset+AddrSize)
+	for i := 0; i < len(fees); i++ {
+		encoded = append(encoded, path[i].Bytes()...)
+		feeBytes := big.NewInt(int64(fees[i])).Bytes()
+		feeBytes = common.LeftPadBytes(feeBytes, 3)
+		encoded = append(encoded, feeBytes...)
+	}
+	encoded = append(encoded, path[len(path)-1].Bytes()...)
+	return
+}
+
 func (c *UniswapV2Contract) GetAmountsIn(client *ethclient.Client, amountOut *big.Int, path []common.Address) ([]*big.Int, error) {
+	if c.swapVersion == versionV3 {
+		return c.quoteExactOutput(client, amountOut, reverseAddress(path))
+	}
+
 	opts := &bind.CallOpts{}
 	msg, err := packInput(c.Abi, opts.From, c.Address, methodGetAmountIn, amountOut, path)
 	if err != nil {
@@ -256,7 +321,67 @@ func (c *UniswapV2Contract) GetAmountsIn(client *ethclient.Client, amountOut *bi
 	return resp, nil
 }
 
+func reverseAddress(s []common.Address) []common.Address {
+	a := make([]common.Address, len(s))
+	copy(a, s)
+
+	for i := len(a)/2 - 1; i >= 0; i-- {
+		opp := len(a) - 1 - i
+		a[i], a[opp] = a[opp], a[i]
+	}
+
+	return a
+}
+
+func (c *UniswapV2Contract) quoteExactInput(client *ethclient.Client, amountIn *big.Int, path []common.Address) ([]*big.Int, error) {
+	opts := &bind.CallOpts{}
+	pathByte, err := encodePath(path)
+	if err != nil {
+		return nil, err
+	}
+	msg, err := packInput(c.quoteAbi, opts.From, c.quoteAddress, methodQuoteExactInput, pathByte, amountIn)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := big.NewInt(0)
+	err = unpackOutput(&resp, c.quoteAbi, methodQuoteExactInput, resData)
+	if err != nil {
+		return nil, err
+	}
+	return []*big.Int{resp}, nil
+}
+
+func (c *UniswapV2Contract) quoteExactOutput(client *ethclient.Client, amountOut *big.Int, path []common.Address) ([]*big.Int, error) {
+	opts := &bind.CallOpts{}
+	pathByte, err := encodePath(path)
+	if err != nil {
+		return nil, err
+	}
+	msg, err := packInput(c.quoteAbi, opts.From, c.quoteAddress, methodQuoteExactOutput, pathByte, amountOut)
+	if err != nil {
+		return nil, err
+	}
+	resData, err := bind.ContractCaller(client).CallContract(context.Background(), msg, opts.BlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	resp := big.NewInt(0)
+	err = unpackOutput(&resp, c.quoteAbi, methodQuoteExactOutput, resData)
+	if err != nil {
+		return nil, err
+	}
+	return []*big.Int{resp}, nil
+}
+
 func (c *UniswapV2Contract) GetAmountsOut(client *ethclient.Client, amountIn *big.Int, path []common.Address) ([]*big.Int, error) {
+	if c.swapVersion == versionV3 {
+		return c.quoteExactInput(client, amountIn, path)
+	}
+
 	opts := &bind.CallOpts{}
 	msg, err := packInput(c.Abi, opts.From, c.Address, methodGetAmountsOut, amountIn, path)
 	if err != nil {
@@ -308,21 +433,15 @@ func (c *Erc20Contract) Approve(rpc string, client *ethclient.Client, account *e
 }
 
 func signAndSendTx(rawBytes []byte, rpc string, account *eth.Account) (string, error) {
-	decodeTx := types.NewTx(&types.DynamicFeeTx{})
-	err := decodeTx.UnmarshalBinary(rawBytes)
-	if err != nil {
-		return "", err
-	}
 	wallet := eth.NewChainWithRpc(rpc)
 	privateKeyHex, err := account.PrivateKeyHex()
 	if err != nil {
 		return "", err
 	}
-	tx := eth.NewTransaction(strconv.Itoa(int(decodeTx.Nonce())),
-		decodeTx.GasTipCap().String(),
-		strconv.Itoa(int(decodeTx.Gas())),
-		decodeTx.To().String(), decodeTx.Value().String(), hex.EncodeToString(decodeTx.Data()))
-	tx.MaxPriorityFeePerGas = decodeTx.GasPrice().Text(10)
+	tx, err := eth.NewTransactionFromHex(hex.EncodeToString(rawBytes))
+	if err != nil {
+		return "", err
+	}
 	signedTx, err := wallet.SignTransaction(privateKeyHex, tx)
 	if err != nil {
 		return "", err
@@ -353,9 +472,43 @@ func createRawTx(ctx context.Context,
 	}
 	gasLimit := uint64(float64(estimateGas) * 5)
 
-	priorityFee, err := client.SuggestGasTipCap(ctx)
+	var (
+		maxPriorityFee *big.Int
+		maxFee         *big.Int
+	)
+	priorityRate := 1.5
+	maxFeeRate := 1.1
+	// base fee
+	header, err := client.HeaderByNumber(ctx, big.NewInt(-1))
+	if err != nil || header.BaseFee == nil {
+		var gasPrice *big.Int
+		gasPrice, err = client.SuggestGasPrice(ctx)
+		if err != nil {
+			return nil, err
+		}
+		maxPriorityFee = decimal.NewFromBigInt(gasPrice, 0).Mul(decimal.NewFromFloat(maxFeeRate)).BigInt()
+		maxFee = maxPriorityFee
+	} else {
+		// tip fee
+		priorityFee, err := client.SuggestGasTipCap(ctx) // GasFeeCap maxFeePerGas
+		if err != nil {
+			return nil, err
+		}
+
+		// MaxPriorityFee = SuggestPriorityFee * priorityRate
+		// MaxFee = (MaxPriorityFee + BaseFee) * maxFeeRate
+		maxPriorityFee = decimal.NewFromBigInt(priorityFee, 0).Mul(decimal.NewFromFloat(priorityRate)).BigInt()
+		maxFee = decimal.NewFromBigInt(big.NewInt(0).Add(maxPriorityFee, header.BaseFee), 0).Mul(decimal.NewFromFloat(maxFeeRate)).BigInt()
+	}
+
 	if err != nil {
-		return nil, err
+		errInfo := err.Error()
+		// 尽管用户的余额不够，也需要返回可兑换的结果，用户最后执行的时候会再 estimateGas，那时候会失败
+		if strings.Contains(errInfo, "insufficient funds for transfer") {
+			err = nil
+		} else {
+			return nil, err
+		}
 	}
 
 	rawTx := types.NewTx(&types.DynamicFeeTx{
@@ -363,8 +516,8 @@ func createRawTx(ctx context.Context,
 		To:        contract,
 		Value:     value,
 		Gas:       gasLimit,
-		GasFeeCap: priorityFee,
-		GasTipCap: decimal.NewFromBigInt(priorityFee, 0).Mul(decimal.NewFromFloat(8)).BigInt(),
+		GasFeeCap: maxFee,
+		GasTipCap: maxPriorityFee,
 		Data:      msg.Data,
 	})
 	return rawTx.MarshalBinary()

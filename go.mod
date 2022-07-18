@@ -3,7 +3,7 @@ module so-omnichain-example
 go 1.18
 
 require (
-	github.com/coming-chat/wallet-SDK v0.2.4
+	github.com/coming-chat/wallet-SDK v0.2.6-0.20220714104311-4b3ffa10b2e8
 	github.com/fatih/color v1.13.0
 	gopkg.in/yaml.v3 v3.0.1
 )
